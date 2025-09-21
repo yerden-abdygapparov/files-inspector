@@ -1,0 +1,24 @@
+{
+  "src": "/Users/yerden/src/aircraft-dashboard/src",
+  "entryPoint": "/Users/yerden/src/aircraft-dashboard/src/index.tsx",
+  "root": "/Users/yerden/src/aircraft-dashboard/src",
+  "indexCandidates": ["index.js", "index.ts", "index.tsx", "index.jsx"],
+  "ignoredPatterns": [".spec.", ".test.", ".stories.", ".mock."],
+  "aliases": {
+    "apps": "apps/",
+    "components": "components/",
+    "i18n": "i18n/",
+    "interfaces": "interfaces/",
+    "theme": "theme/",
+    "types": "types/",
+    "utils": "utils/",
+    "api": "api/"
+  },
+  "allowedExtensions": {
+    ".js": true,
+    ".ts": true,
+    ".tsx": true,
+    ".jsx": true,
+    ".scss": true
+  }
+}
