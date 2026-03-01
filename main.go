@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"io"
 	"os"
 	"path/filepath"
@@ -20,6 +21,13 @@ type Config struct {
 	IgnoredPatterns   []string          `json:"ignoredPatterns"`
 	Aliases           map[string]string `json:"aliases"`
 	AllowedExtensions map[string]bool   `json:"allowedExtensions"`
+}
+
+type DuplicatesGroup struct {
+	Number int
+	Ext    string
+	Count  int
+	List   []string
 }
 
 var cfg *Config
@@ -98,21 +106,50 @@ func findUnusedAndDuplicatedFiles(graph *ImportGraph, files []string) {
 	}
 
 	writeToJsonFile("unused", unused)
-	writeToJsonFile("dublicates", duplicated)
 
 	processUnused(unused)
-	processDublicated(duplicated)
+
+	processDublicatedFiles(duplicated)
 
 }
 
-func processDublicated(duplicated map[string][]string) {
-	duplicatedTotal := len(duplicated)
+func serializeDublicates(duplicated map[string][]string) []DuplicatesGroup {
+	var result []DuplicatesGroup
+	count := 0
 
-	if duplicatedTotal == 0 {
-		fmt.Println("✅ No duplicates found!")
-	} else {
-		fmt.Printf("⚠️  Duplicated files: %d\n", duplicatedTotal)
+	for hash, group := range duplicated {
+		count++
+
+		var ext string
+		if hash == "empty" {
+			ext = "empty"
+		} else {
+			ext = filepath.Ext(group[0])
+		}
+
+		result = append(result, DuplicatesGroup{
+			Number: count,
+			Ext:    ext,
+			Count:  len(group),
+			List:   group,
+		})
 	}
+
+	return result
+}
+
+func processDublicatedFiles(duplicated map[string][]string) {
+	dir := "dublicates"
+	duplicatedGroups := serializeDublicates(duplicated)
+
+	err := os.MkdirAll(dir, os.ModePerm)
+	if err != nil {
+		panic(err)
+	}
+
+	generateMarkdownReport(duplicatedGroups, filepath.Join(dir, "duplicates_report.md"))
+	generateHTMLReport(duplicatedGroups, filepath.Join(dir, "duplicates_template.html"))
+
 }
 
 func processUnused(unused []string) {
@@ -139,6 +176,15 @@ func hashFileMD5(filePath string) (string, error) {
 		return "", err
 	}
 	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return "", err
+	}
+
+	if info.Size() == 0 {
+		return "empty", nil
+	}
 
 	hash := md5.New()
 	if _, err := io.Copy(hash, file); err != nil {
@@ -227,21 +273,21 @@ func extractImports(filePath string) ([]string, error) {
 }
 
 func getFileWithExtension(absPath string) (string, bool) {
-	info, err := os.Stat(absPath)
-	if err == nil {
-		if info.IsDir() {
-			return findIndexFile(absPath)
-		}
+	absPath = filepath.Clean(absPath)
 
+	if info, err := os.Stat(absPath); err == nil && !info.IsDir() {
 		ext := filepath.Ext(absPath)
-
 		if cfg.AllowedExtensions[ext] {
-			return filepath.Clean(absPath), true
+			return absPath, true
 		}
 	}
 
 	if fullPath, ok := findFileWithExtension(absPath); ok {
 		return fullPath, true
+	}
+
+	if info, err := os.Stat(absPath); err == nil && info.IsDir() {
+		return findIndexFile(absPath)
 	}
 
 	return "", false
@@ -315,4 +361,103 @@ func (g *ImportGraph) Traverse(file string) {
 			g.Traverse(resolvedPath)
 		}
 	}
+}
+
+func generateMarkdownReport(groups []DuplicatesGroup, outputPath string) error {
+	var sb strings.Builder
+
+	sb.WriteString("# Duplicate Files Report\n\n")
+	sb.WriteString("| Group # | File Type | File Count | Duplicates List |\n")
+	sb.WriteString("|----------|------------|-------------|-----------------|\n")
+
+	for _, group := range groups {
+		list := strings.Join(group.List, "<br>")
+		list = strings.ReplaceAll(list, "|", "\\|")
+
+		sb.WriteString(fmt.Sprintf("| %d | %s | %d | %s |\n", group.Number, group.Ext, group.Count, list))
+	}
+
+	return os.WriteFile(outputPath, []byte(sb.String()), 0644)
+}
+
+func generateHTMLReport(dublicates []DuplicatesGroup, outputPath string) error {
+	const tpl = `
+		<!DOCTYPE html>
+		<html lang="en">
+		<head>
+			<meta charset="UTF-8">
+			<title>Duplicate Files Report</title>
+			<style>
+				body {
+					font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+					color: #333;
+					padding: 32px;
+				}
+				h1 {
+					margin-bottom: 24px;
+				}
+				table {
+					width: 100%;
+					border-collapse: collapse;
+					border: 1px solid #e0e0e0;
+					font-size: 14px;
+				}
+				th, td {
+					padding: 10px 12px;
+					text-align: left;
+					border-bottom: 1px solid #e0e0e0;
+					vertical-align: top;
+				}
+				tr:hover {
+					background-color: #f5f5f5;
+				}
+				td pre {
+					margin: 0;
+					font-family: monospace;
+					white-space: pre-wrap;
+					word-break: break-word;
+				}
+			</style>
+		</head>
+		<body>
+			<h1>Duplicate Files Report</h1>
+			<table>
+				<thead>
+					<tr>
+						<th>Group #</th>
+						<th>File Type</th>
+						<th>File Count</th>
+						<th>Duplicates List</th>
+					</tr>
+				</thead>
+				<tbody>
+					{{range .}}
+					<tr>
+						<td>{{.Number}}</td>
+						<td>{{.Ext}}</td>
+						<td>{{.Count}}</td>
+						<td><pre>{{range .List}}{{.}}{{"\n"}}{{end}}</pre></td>
+					</tr>
+					{{end}}
+				</tbody>
+			</table>
+		</body>
+		</html>`
+
+	t, err := template.New("report").Parse(tpl)
+	if err != nil {
+		return fmt.Errorf("template parse error: %v", err)
+	}
+
+	file, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("file create error: %v", err)
+	}
+	defer file.Close()
+
+	if err := t.Execute(file, dublicates); err != nil {
+		return fmt.Errorf("template exec error: %v", err)
+	}
+
+	return nil
 }
